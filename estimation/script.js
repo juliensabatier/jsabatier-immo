@@ -1,0 +1,536 @@
+/* ==========================================================
+   CONFIGURATION
+   ========================================================== */
+
+// Webhook Make (scénario "BSK Estimateur en ligne => Mail + Brevo").
+// Le scénario envoie le mail de notification à Julien et crée la fiche Brevo.
+const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/ya9za12hm6phh3ydfuiwiwqtrrwv16zf";
+
+// Secours : utilisé seulement si Make est injoignable (panne réseau).
+// Clé publique Web3Forms liée à l'adresse mail de travail du compte.
+const WEB3FORMS_ACCESS_KEY = "2217a974-c3d8-40d4-a3f1-d0ad6afb05f3";
+const WEB3FORMS_ENDPOINT = "https://api.web3forms.com/submit";
+
+/* Barème calé sur les ventes réelles DVF (data.gouv.fr) du secteur, 2021 à 2025 :
+   1 609 maisons et 101 terrains à bâtir sur 15 communes (analyse du 17/10/2026).
+   Maison type du secteur : 92 m², 1 050 m² de terrain, 1 121 €/m² (médiane 2023-2025). */
+
+// Prix au m² par état, pour une maison type du secteur (coefficient commune = 1).
+// DVF ne connaît pas l'état : chaque état est associé à une tranche de prix
+// (10 % les moins chères, quart inférieur, médiane, quart supérieur),
+// puis recalé pour que l'état « bon » tombe sur le prix médian réel (test sur 865 ventes).
+const PRIX_M2_PAR_ETAT = {
+  "À rénover entièrement": 525,
+  "Travaux à prévoir": 820,
+  "Bon état général": 1180,
+  "Très bon état / récent": 1540
+};
+const PRIX_M2_DEFAUT = 1180;
+
+// Écart de prix au m² de chaque commune par rapport au secteur (médianes 2023-2025).
+// Curzay-sur-Vonne et Cloué : peu de ventes, coefficient rapproché de 1 par prudence.
+const COEF_COMMUNE = {
+  "Coulombiers": 1.50,
+  "Celle-Lévescault": 1.30,
+  "Cloué": 1.15,
+  "Benassay": 1.14,          // commune Boivre-la-Vallée dans DVF
+  "Lusignan": 1.12,
+  "Jazeneuil": 1.09,
+  "Couhé": 0.99,             // commune Valence-en-Poitou dans DVF
+  "Rouillé": 0.98,
+  "Chaunay": 0.90,
+  "Saint-Sauvant": 0.89,
+  "Sanxay": 0.85,
+  "Pamproux": 0.85,
+  "Ménigoute": 0.85,
+  "Curzay-sur-Vonne": 0.85,
+  "Savigné": 0.80
+};
+function coefCommune(commune) { return COEF_COMMUNE[commune] || 1; }
+
+// Taille : le prix au m² baisse quand la maison grandit (prix ~ surface^0,75 dans DVF).
+const SURFACE_REFERENCE = 92;
+const ELASTICITE_SURFACE = -0.25;
+function coefSurface(surface) {
+  const c = Math.pow(surface / SURFACE_REFERENCE, ELASTICITE_SURFACE);
+  return Math.min(1.10, Math.max(0.75, c));
+}
+
+// Terrain : forte décote pour les petites parcelles (maisons de bourg),
+// quasiment plus d'effet au-delà de 1 000 m². Vide = petite cour, compté 200 m².
+const TERRAIN_REFERENCE = 1050;
+const TERRAIN_SI_VIDE = 200;
+function coefTerrain(terrain) {
+  const t = Math.max(100, parseInt(terrain, 10) || TERRAIN_SI_VIDE);
+  // Au-delà de 300 m² : effet modéré. En dessous : décote plus marquée (maisons de bourg).
+  const c300 = Math.pow(301 / (1 + TERRAIN_REFERENCE), 0.12);
+  const c = t >= 300
+    ? Math.pow((1 + t) / (1 + TERRAIN_REFERENCE), 0.12)
+    : c300 * Math.pow(t / 300, 0.5);
+  return Math.min(1.03, Math.max(0.6, c));
+}
+
+const MARGE_FOURCHETTE = 0.08; // fourchette = estimation -8% / +8%
+
+// Terrains à bâtir (DVF) : médiane 42 €/m² jusqu'à 800 m², puis la valeur
+// progresse peu (une parcelle se vend autour de 30 000 € quelle que soit sa taille).
+const TERRAIN_PRIX_M2_JUSQUA_800 = 42;
+const TERRAIN_PRIX_M2_AU_DELA = 8;
+const COEF_SITUATION_TERRAIN = {
+  "Terrain constructible et viabilisé": 1,
+  // Pas distingué dans DVF : décote estimée pour le coût des raccordements, à valider
+  "Terrain constructible à viabiliser": 0.75,
+  "Terrain, constructibilité à vérifier": 0.65
+};
+// Terres, prés et bois non constructibles : médiane 0,50 €/m² dans DVF
+const PRIX_M2_NON_CONSTRUCTIBLE = 0.5;
+const MARGE_FOURCHETTE_TERRAIN = 0.15; // fourchette plus large pour un terrain
+const NON_APPLICABLE = "Non applicable (terrain)";
+
+/* ==========================================================
+   ETAT
+   ========================================================== */
+
+let selectedType = "Maison";
+let selectedEtat = "";
+
+/* ==========================================================
+   INTERACTIONS
+   ========================================================== */
+
+function $(id) { return document.getElementById(id); }
+
+function showError(msg) {
+  const e = $("error-msg");
+  e.textContent = msg;
+  e.classList.add("visible");
+  setTimeout(() => e.classList.remove("visible"), 4000);
+}
+
+function setStep(n) {
+  document.querySelectorAll(".form-step").forEach(s => s.classList.remove("active"));
+  $("step-" + n).classList.add("active");
+
+  for (let i = 1; i <= 3; i++) {
+    const dot = $("dot-" + i);
+    dot.className = "step-dot";
+    if (i < n) dot.classList.add("done");
+    else if (i === n) dot.classList.add("active");
+    if (i < 3) $("line-" + i).className = "step-line" + (i < n ? " done" : "");
+  }
+  window.scrollTo({ top: $("form-section").offsetTop - 20, behavior: "smooth" });
+}
+
+function estTerrain() { return selectedType === "Terrain"; }
+
+// Affiche les champs adaptés au type de bien : un terrain n'a ni surface
+// habitable, ni année de construction, ni pièces, chauffage, DPE, etc.
+function adapterFormulaire() {
+  const terrain = estTerrain();
+
+  $("field-surface").hidden = terrain;
+  $("field-annee").hidden = terrain;
+  $("bloc-habitable").hidden = terrain;
+  $("bloc-terrain").hidden = !terrain;
+
+  $("terrain-label").textContent = terrain ? "Surface du terrain (m²)" : "Terrain (m²)";
+  $("terrain-required").hidden = !terrain;
+  $("terrain-note").hidden = terrain;
+  $("terrain").placeholder = terrain ? "ex: 1200" : "ex: 800";
+
+  $("step2-desc").textContent = terrain
+    ? "Décrivez la situation de votre terrain."
+    : "Décrivez l'état et les équipements de votre bien.";
+  $("points_forts").placeholder = terrain
+    ? "Ex: bornage réalisé, accès facile, vue dégagée, réseaux en bordure…"
+    : "Ex: piscine, dépendances, cuisine récente, proche gare, calme absolu…";
+
+  // L'état choisi pour une maison ne vaut pas pour un terrain, et inversement
+  selectedEtat = "";
+  document.querySelectorAll(".etat-card").forEach(c => c.classList.remove("selected"));
+}
+
+function nextStep(from) {
+  if (from === 1) {
+    if (!$("commune").value) return showError("Veuillez sélectionner une commune.");
+    if (estTerrain()) {
+      if (!$("terrain").value) return showError("Veuillez indiquer la surface du terrain.");
+    } else if (!$("surface").value) {
+      return showError("Veuillez indiquer la surface habitable.");
+    }
+  }
+  if (from === 2) {
+    if (estTerrain()) {
+      if (!selectedEtat) return showError("Veuillez indiquer la situation du terrain.");
+    } else {
+      if (!selectedEtat) return showError("Veuillez sélectionner l'état général du bien.");
+      if (!$("pieces").value) return showError("Veuillez indiquer le nombre de pièces.");
+    }
+  }
+  setStep(from + 1);
+}
+
+function bindEvents() {
+  $("start-cta").addEventListener("click", () => {
+    $("form-section").scrollIntoView({ behavior: "smooth" });
+  });
+
+  document.querySelectorAll(".type-card").forEach(card => {
+    card.addEventListener("click", () => {
+      document.querySelectorAll(".type-card").forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+      const avant = selectedType;
+      selectedType = card.dataset.type;
+      if ((avant === "Terrain") !== estTerrain()) adapterFormulaire();
+    });
+  });
+
+  document.querySelectorAll(".etat-card").forEach(card => {
+    card.addEventListener("click", () => {
+      document.querySelectorAll(".etat-card").forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+      selectedEtat = card.dataset.etat;
+    });
+  });
+
+  document.querySelectorAll("[data-next]").forEach(btn => {
+    btn.addEventListener("click", () => nextStep(parseInt(btn.dataset.next, 10)));
+  });
+  document.querySelectorAll("[data-prev]").forEach(btn => {
+    btn.addEventListener("click", () => setStep(parseInt(btn.dataset.prev, 10) - 1));
+  });
+
+  $("consent").addEventListener("change", () => {
+    $("submit-btn").disabled = !$("consent").checked;
+  });
+  $("consent-box").addEventListener("click", (ev) => {
+    if (ev.target.id === "consent" || ev.target.tagName === "LABEL") return;
+    $("consent").click();
+  });
+
+  $("submit-btn").addEventListener("click", submitEstimation);
+}
+
+/* ==========================================================
+   DONNEES ET ESTIMATION
+   ========================================================== */
+
+function collectData() {
+  if (estTerrain()) {
+    return {
+      type: selectedType,
+      commune: $("commune").value,
+      surface: "",
+      terrain: $("terrain").value,
+      annee: NON_APPLICABLE,
+      etat: selectedEtat,
+      pieces: NON_APPLICABLE,
+      chambres: NON_APPLICABLE,
+      sdb: NON_APPLICABLE,
+      chauffage: NON_APPLICABLE,
+      dpe: NON_APPLICABLE,
+      garage: NON_APPLICABLE,
+      exposition: $("exposition").value || "Non précisée",
+      environnement: $("environnement").value || "Non précisé",
+      points_forts: $("points_forts").value.trim() || "Aucun",
+      prenom: $("prenom").value.trim(),
+      nom: $("nom").value.trim(),
+      telephone: $("telephone").value.trim(),
+      email: $("email").value.trim() || "Non renseigné",
+      projet: $("projet").value
+    };
+  }
+  return {
+    type: selectedType,
+    commune: $("commune").value,
+    surface: $("surface").value,
+    terrain: $("terrain").value || "Non précisé",
+    annee: $("annee").value || "Non précisée",
+    etat: selectedEtat,
+    pieces: $("pieces").value,
+    chambres: $("chambres").value || "Non précisé",
+    sdb: $("sdb").value || "Non précisé",
+    chauffage: $("chauffage").value || "Non précisé",
+    dpe: $("dpe").value || "Non renseigné",
+    garage: $("garage").value,
+    exposition: $("exposition").value || "Non précisée",
+    environnement: $("environnement").value || "Non précisé",
+    points_forts: $("points_forts").value.trim() || "Aucun",
+    prenom: $("prenom").value.trim(),
+    nom: $("nom").value.trim(),
+    telephone: $("telephone").value.trim(),
+    email: $("email").value.trim() || "Non renseigné",
+    projet: $("projet").value
+  };
+}
+
+function calculerEstimationTerrain(data) {
+  const surface = parseInt(data.terrain, 10) || 1000;
+  let base;
+  if (data.etat === "Terrain non constructible") {
+    base = surface * PRIX_M2_NON_CONSTRUCTIBLE;
+  } else {
+    const valeurViabilise = Math.min(surface, 800) * TERRAIN_PRIX_M2_JUSQUA_800
+      + Math.max(0, surface - 800) * TERRAIN_PRIX_M2_AU_DELA;
+    const coefSituation = COEF_SITUATION_TERRAIN[data.etat] || COEF_SITUATION_TERRAIN["Terrain, constructibilité à vérifier"];
+    base = valeurViabilise * coefSituation * coefCommune(data.commune);
+  }
+  const prixM2 = base / surface;
+
+  const atouts = ["Terrain situé dans le Pays Mélusin"];
+  const vigilances = [];
+  if (data.etat === "Terrain constructible et viabilisé") atouts.push("Terrain prêt à bâtir");
+  if (["Sud", "Sud-Est", "Sud-Ouest"].includes(data.exposition)) atouts.push("Bonne exposition");
+  if (["Vue dégagée", "Lotissement calme"].includes(data.environnement)) atouts.push("Environnement calme et agréable");
+  if (data.points_forts !== "Aucun") atouts.push(data.points_forts.split(",")[0].trim());
+  if (data.etat === "Terrain constructible à viabiliser") vigilances.push("Coût des raccordements à intégrer dans le prix");
+  if (data.etat === "Terrain non constructible") vigilances.push("Valeur limitée tant que le terrain n'est pas constructible");
+  if (data.etat === "Terrain, constructibilité à vérifier") vigilances.push("Constructibilité à vérifier au PLU de la commune");
+  if (data.environnement === "Proche axe passant") vigilances.push("Proximité d'un axe passant, à vérifier avec les acquéreurs");
+  if (!vigilances.length) vigilances.push("Bornage et accès à confirmer lors d'une visite");
+
+  // Arrondi à la centaine pour les petits montants (terrain non constructible)
+  const arrondi = base < 20000 ? 100 : 1000;
+  return {
+    prix_min: Math.max(arrondi, Math.round(base * (1 - MARGE_FOURCHETTE_TERRAIN) / arrondi) * arrondi),
+    prix_max: Math.max(arrondi, Math.round(base * (1 + MARGE_FOURCHETTE_TERRAIN) / arrondi) * arrondi),
+    // Moins de 10 €/m² (non constructible) : une décimale, sinon arrondi à l'euro
+    prix_m2: prixM2 < 10 ? Math.round(prixM2 * 10) / 10 : Math.round(prixM2),
+    analyse: `Votre terrain de ${surface} m² à ${data.commune} a été estimé selon sa situation : "${data.etat}". Pour un terrain, la constructibilité, la viabilisation et l'accès pèsent plus que tout le reste. Un avis de valeur sur place par Julien permettra de l'affiner avec les ventes récentes du secteur.`,
+    atouts: atouts.slice(0, 3),
+    vigilances: vigilances.slice(0, 2)
+  };
+}
+
+function calculerEstimation(data) {
+  if (data.type === "Terrain") return calculerEstimationTerrain(data);
+  const surface = parseInt(data.surface, 10) || 100;
+  const terrainSaisi = parseInt(data.terrain, 10);
+  const prixM2 = (PRIX_M2_PAR_ETAT[data.etat] || PRIX_M2_DEFAUT)
+    * coefCommune(data.commune)
+    * coefSurface(surface)
+    * coefTerrain(isNaN(terrainSaisi) ? "" : terrainSaisi);
+  const base = surface * prixM2;
+
+  const atouts = ["Bien localisé dans le Pays Mélusin"];
+  const vigilances = [];
+  if (data.garage !== "Non") atouts.push("Stationnement ou garage disponible");
+  if (["Sud", "Sud-Est", "Sud-Ouest"].includes(data.exposition)) atouts.push("Bonne exposition, lumineux");
+  if (["Vue dégagée", "Lotissement calme"].includes(data.environnement)) atouts.push("Environnement calme et agréable");
+  if (data.points_forts !== "Aucun") atouts.push(data.points_forts.split(",")[0].trim());
+  if (data.dpe.startsWith("F") || data.dpe.startsWith("G")) vigilances.push("DPE énergivore : travaux d'isolation à anticiper");
+  if (data.etat.includes("rénover") || data.etat.includes("Travaux")) vigilances.push("Travaux à prévoir, à intégrer dans la négociation");
+  if (data.environnement === "Proche axe passant") vigilances.push("Proximité d'un axe passant, à vérifier avec les acquéreurs");
+  if (!vigilances.length) vigilances.push("À confirmer lors d'une visite approfondie");
+
+  return {
+    prix_min: Math.round(base * (1 - MARGE_FOURCHETTE) / 1000) * 1000,
+    prix_max: Math.round(base * (1 + MARGE_FOURCHETTE) / 1000) * 1000,
+    prix_m2: Math.round(prixM2),
+    analyse: `Votre ${data.type.toLowerCase()} de ${surface} m² à ${data.commune} présente des caractéristiques cohérentes avec le marché du Pays Mélusin. L'état "${data.etat}" pèse fortement dans cette estimation. Un avis de valeur à domicile par Julien permettra de l'affiner avec un dossier complet de comparaison.`,
+    atouts: atouts.slice(0, 3),
+    vigilances: vigilances.slice(0, 2)
+  };
+}
+
+/* ==========================================================
+   ENVOI DE LA DEMANDE (silencieux, en arrière-plan)
+   1. Webhook Make : mail à Julien + fiche contact Brevo.
+   2. Web3Forms en secours si Make est injoignable.
+   Aucune ouverture de messagerie cote visiteur.
+   ========================================================== */
+
+// Canal d'arrivée du visiteur, d'après le paramètre utm_source du lien.
+// Valeurs reconnues par le scénario Make (catégorie SOURCE de Brevo) :
+// META, GROUPES_FB, GOOGLE, EMAIL, RESEAU, BSK (par défaut).
+// L'utm_source est lu en premier : Facebook ajoute aussi fbclid aux liens
+// partagés dans les groupes, qui doivent rester distincts de la pub.
+function detecterSource() {
+  const params = new URLSearchParams(window.location.search);
+  const utm = (params.get("utm_source") || "").toLowerCase();
+  if (/groupe/.test(utm)) return "GROUPES_FB";
+  if (/facebook|meta|instagram|^fb$|^ig$/.test(utm)) return "META";
+  if (/google/.test(utm)) return "GOOGLE";
+  if (/email|mail|brevo|newsletter/.test(utm)) return "EMAIL";
+  if (/reseau|whatsapp|sms|parrain/.test(utm)) return "RESEAU";
+  if (utm) return "BSK";
+  if (params.has("fbclid")) return "META";
+  if (params.has("gclid")) return "GOOGLE";
+  return "BSK";
+}
+
+async function envoyerVersMake(data, est) {
+  const champs = new URLSearchParams({
+    ...data,
+    email: data.email === "Non renseigné" ? "" : data.email,
+    prix_min: est.prix_min,
+    prix_max: est.prix_max,
+    prix_m2: est.prix_m2,
+    source: detecterSource(),
+    utm_source: new URLSearchParams(window.location.search).get("utm_source") || "",
+    utm_campaign: new URLSearchParams(window.location.search).get("utm_campaign") || "",
+    page: window.location.href,
+    date_demande: new Date().toISOString(),
+    botcheck: $("hp").value
+  });
+
+  // Requête "simple" (formulaire encodé, mode no-cors) : pas de pré-vol CORS.
+  // La réponse est opaque : seule une panne réseau lève une erreur.
+  await fetch(MAKE_WEBHOOK_URL, {
+    method: "POST",
+    mode: "no-cors",
+    keepalive: true,
+    body: champs
+  });
+}
+
+async function envoyerDemande(data, est) {
+  try {
+    await envoyerVersMake(data, est);
+  } catch (err) {
+    console.error("Webhook Make injoignable, envoi de secours via Web3Forms :", err);
+    envoyerRecap(data, est);
+  }
+}
+
+function construireRecap(data, est) {
+  return [
+    "Nouvelle demande reçue via le formulaire d'estimation en ligne.",
+    "",
+    "--- CONTACT ---",
+    `Nom : ${data.prenom} ${data.nom}`,
+    `Téléphone : ${data.telephone}`,
+    `Email : ${data.email}`,
+    `Projet : ${data.projet}`,
+    "",
+    "--- BIEN ---",
+    `Type : ${data.type}`,
+    `Commune : ${data.commune}`,
+    data.type === "Terrain"
+      ? `Surface du terrain : ${data.terrain} m²`
+      : `Surface : ${data.surface} m²  |  Terrain : ${data.terrain} m²`,
+    `Année : ${data.annee}  |  État : ${data.etat}`,
+    `Pièces : ${data.pieces}  |  Chambres : ${data.chambres}  |  SdB : ${data.sdb}`,
+    `Chauffage : ${data.chauffage}  |  DPE : ${data.dpe}  |  Garage : ${data.garage}`,
+    `Exposition : ${data.exposition}  |  Environnement : ${data.environnement}`,
+    `Points forts : ${data.points_forts}`,
+    "",
+    "--- ESTIMATION CALCULEE ---",
+    `Fourchette : ${est.prix_min} € à ${est.prix_max} € (${est.prix_m2} €/m²)`,
+    "",
+    `Consentement de contact : OUI (case cochée le ${new Date().toLocaleString("fr-FR")})`
+  ].join("\n");
+}
+
+async function envoyerRecap(data, est) {
+  const payload = {
+    access_key: WEB3FORMS_ACCESS_KEY,
+    subject: `Nouvelle demande d'estimation - ${data.prenom} ${data.nom} (${data.commune})`,
+    from_name: "Estimateur en ligne Pays Mélusin",
+    message: construireRecap(data, est),
+    botcheck: $("hp").value
+  };
+  if (data.email !== "Non renseigné") payload.replyto = data.email;
+
+  try {
+    const res = await fetch(WEB3FORMS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) {
+      console.error("Web3Forms a refusé l'envoi :", json);
+    }
+  } catch (err) {
+    console.error("Envoi du récapitulatif impossible :", err);
+  }
+}
+
+/* ==========================================================
+   SOUMISSION ET AFFICHAGE
+   ========================================================== */
+
+function animateLoadingSteps() {
+  const steps = ["ls1", "ls2", "ls3"];
+  let i = 0;
+  const iv = setInterval(() => {
+    steps.forEach(s => $(s).classList.remove("active-step"));
+    if (i < steps.length) {
+      $(steps[i]).classList.add("active-step");
+      i++;
+    } else {
+      clearInterval(iv);
+    }
+  }, 600);
+}
+
+function submitEstimation() {
+  if (!$("consent").checked) return showError("Merci de cocher la case de consentement pour être recontacté(e).");
+  const data = collectData();
+  if (!data.prenom || !data.nom || !data.telephone) return showError("Veuillez remplir prénom, nom et téléphone.");
+
+  $("loading").classList.add("visible");
+  animateLoadingSteps();
+
+  const est = calculerEstimation(data);
+
+  // L'envoi part en arrière-plan : l'affichage du résultat n'en dépend pas.
+  envoyerDemande(data, est);
+
+  setTimeout(() => {
+    $("loading").classList.remove("visible");
+    showResults(data, est);
+  }, 1800);
+}
+
+function showResults(data, est) {
+  $("form-section").style.display = "none";
+  const rs = $("result-section");
+  rs.classList.add("visible");
+
+  const fmt = n => new Intl.NumberFormat("fr-FR").format(n) + " €";
+  $("price-display").textContent = fmt(est.prix_min) + " à " + fmt(est.prix_max);
+  const prixM2Affiche = new Intl.NumberFormat("fr-FR").format(est.prix_m2);
+  $("price-sub").textContent = `Soit environ ${prixM2Affiche} €/m² · ${data.type} à ${data.commune}`;
+
+  // Construction par le DOM et textContent : aucune injection HTML possible
+  const factors = $("result-factors");
+  factors.textContent = "";
+  const terrain = data.type === "Terrain";
+  [
+    terrain ? ["📐", `${data.terrain} m²`, "Surface du terrain"] : ["📐", `${data.surface} m²`, "Surface"],
+    ["🏷️", `${prixM2Affiche} €/m²`, "Prix estimé"],
+    ["📍", data.commune, "Commune"]
+  ].forEach(([icone, valeur, libelle]) => {
+    const bloc = document.createElement("div");
+    bloc.className = "factor";
+    [["factor-icon", icone], ["factor-value", valeur], ["factor-label", libelle]].forEach(([classe, texte]) => {
+      const el = document.createElement("div");
+      el.className = classe;
+      el.textContent = texte;
+      bloc.appendChild(el);
+    });
+    factors.appendChild(bloc);
+  });
+
+  const zone = $("analysis-text");
+  zone.textContent = est.analyse;
+
+  const ajouterListe = (titre, items) => {
+    if (!items || !items.length) return;
+    zone.appendChild(document.createElement("br"));
+    const label = document.createElement("strong");
+    label.className = "analysis-label";
+    label.textContent = titre + " : ";
+    zone.appendChild(label);
+    zone.appendChild(document.createTextNode(items.join(" · ")));
+  };
+  zone.appendChild(document.createElement("br"));
+  ajouterListe("Atouts", est.atouts);
+  ajouterListe("Points de vigilance", est.vigilances);
+
+  rs.scrollIntoView({ behavior: "smooth" });
+}
+
+document.addEventListener("DOMContentLoaded", bindEvents);
