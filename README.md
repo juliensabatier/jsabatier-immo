@@ -6,3 +6,5 @@ Site de Julien Sabatier, conseiller immobilier BSK (Rouillé et alentours).
 - Les pages contiennent `noindex` : à retirer au lancement.
 
 Déploiement automatique : webhook GitHub vers OVH actif (test du 04/11/2026).
+
+Test webhook 2.
