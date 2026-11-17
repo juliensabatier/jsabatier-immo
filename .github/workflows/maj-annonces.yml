@@ -1,0 +1,23 @@
+name: Mise à jour des annonces BSK
+on:
+  schedule:
+    - cron: '17 5 */3 * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  maj:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install playwright && playwright install --with-deps chromium
+      - run: python outils/scrape_bsk.py
+      - run: python outils/maj_annonces.py
+      - name: Commit si changement
+        run: |
+          git config user.name "annonces-bot"
+          git config user.email "bot@jsabatier-immo.fr"
+          git add -A
+          git diff --cached --quiet || (git commit -m "Annonces BSK mises à jour automatiquement" && git push)
