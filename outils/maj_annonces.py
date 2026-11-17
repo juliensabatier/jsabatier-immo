@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Réécrit uniquement les blocs <section id="biens"> à partir de annonces.json."""
-import json,re,html,os
+import json,re,html,os,datetime
+MOIS=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre']
+_d=datetime.date.today();MAJ=f'{_d.day} {MOIS[_d.month-1]} {_d.year}'
 R=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 A=json.load(open(os.path.join(R,'annonces.json'),encoding='utf-8'))
 SLUG={'Rouillé':'rouille','Lusignan':'lusignan','Saint-Sauvant':'saint-sauvant','Curzay-sur-Vonne':'curzay-sur-vonne','Jazeneuil':'jazeneuil','Sanxay':'sanxay','Pamproux':'pamproux','Ménigoute':'menigoute'}
@@ -35,7 +37,7 @@ GRID='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280p
 def section(title,L,empty=None):
     if L: body=''.join(card(a) for a in tri(L))
     else: body=empty
-    return (f'<section id="biens" style="background:#fff;padding:56px 48px"><div style="max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:28px"><h2 style="font-size:34px">{title}</h2>{GRID}{body}</div></div></section>')
+    return (f'<section id="biens" style="background:#fff;padding:56px 48px"><div style="max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:28px"><h2 style="font-size:34px">{title}</h2><p style="margin:-14px 0 0;font-size:14px;color:#4A5C73">Annonces mises à jour le {MAJ}, d\'après ma page BSK.</p>{GRID}{body}</div></div></section>')
 def patch(path,new):
     s=open(path,encoding='utf-8').read()
     n,k=re.subn(r'<section id="biens".*?</section>',lambda m:new,s,count=1,flags=re.S)

@@ -1,3 +1,18 @@
 User-agent: *
 Allow: /
+
+# Moteurs et assistants IA : autorisés à lire et citer le site
+User-agent: GPTBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+
 Sitemap: https://jsabatier-immo.fr/sitemap.xml
