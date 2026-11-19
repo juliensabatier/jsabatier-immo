@@ -224,20 +224,6 @@
   "img": "https://d3co7sr323ligs.cloudfront.net/data/ads/a6e174e7-09f1-468d-8871-4f2dbc520250/47ac00c6-e3f1-48b3-94d4-86af30de0055/c/Eob3HBq6JKV5UjJRuTF02e6WvqHTd7XVbUfA7RXr-branded.jpg"
  },
  {
-  "id": 350856,
-  "commune": "Rouillé",
-  "cp": "86480",
-  "type": "Maison",
-  "surface": 119,
-  "pieces": 5,
-  "chambres": 3,
-  "terrain": "774 m²",
-  "prix": 144000,
-  "statut": "",
-  "url": "https://bskimmobilier.com/bien/rouille/maison-de-119-m/350856?from=agent",
-  "img": "https://d3co7sr323ligs.cloudfront.net/data/ads/f7635136-1a1b-4f42-bdc8-ad54c23bbdcd/145fd8ff-a555-4b9f-9979-622a8c05b3d4/c/mpxx1hnnp6oQmzkwgQWyrLwgTPfYXYvX0B0FqRzW-branded.jpg"
- },
- {
   "id": 351164,
   "commune": "Curzay-sur-Vonne",
   "cp": "86600",
@@ -266,18 +252,18 @@
   "img": "https://d3co7sr323ligs.cloudfront.net/data/ads/eed574b8-55cc-495e-874e-7038be7e3535/2a97e3c2-0b52-464f-8cc9-7a09ba939680/c/tUgbZxVhZQUPbHXcPse2LZ86vwwazQQpjLVonbk3-branded.jpg"
  },
  {
-  "id": 353345,
-  "commune": "Pamproux",
-  "cp": "79800",
-  "type": "Maison",
-  "surface": 105,
-  "pieces": 5,
-  "chambres": 3,
-  "terrain": "783 m²",
-  "prix": 219000,
-  "statut": "",
-  "url": "https://bskimmobilier.com/bien/pamproux/maison-de-105-m/353345?from=agent",
-  "img": "https://d3co7sr323ligs.cloudfront.net/data/ads/da59fd1a-7e9d-4386-b11f-e3db2b619f2a/f77d56b4-cff1-4795-870c-1ff4d9ee9e55/c/wnypoKd7qvgKnNBarObN8eD6mO6QJlraTxKKE2bN-branded.jpg"
+  "id": 352671,
+  "commune": "Benest",
+  "cp": "",
+  "type": "Chateau",
+  "surface": 716,
+  "pieces": null,
+  "chambres": null,
+  "terrain": null,
+  "prix": 2088000,
+  "statut": "Coup de coeur",
+  "url": "https://bskimmobilier.com/bien/benest/chateau-de-716-m/352671?from=agent",
+  "img": "https://d3co7sr323ligs.cloudfront.net/data/ads/a6fb7e60-d2ae-4bf4-a000-8715a853959a/eb7dcf39-0777-436f-a2ab-2357547b85da/c/uILC8Cdm3hv1cknbfrcKZYAL3rTBgJfBa5BsQBrO-branded.jpg"
  },
  {
   "id": 354078,
